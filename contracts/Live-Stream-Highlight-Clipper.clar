@@ -6,6 +6,10 @@
 (define-constant err-already-engaged u104)
 (define-constant err-already-minted u105)
 (define-constant err-threshold-not-met u106)
+(define-constant err-invalid-rating u107)
+(define-constant err-already-rated u108)
+(define-constant err-cannot-rate-own-clip u109)
+(define-constant err-clip-not-minted u110)
 
 (define-data-var owner principal tx-sender)
 (define-data-var next-id uint u1)
@@ -14,6 +18,9 @@
 
 (define-map clips {id: uint} {creator: principal, uri: (string-ascii 256), threshold: uint, engagements: uint, minted: bool, creator-bps: uint, platform: principal})
 (define-map engaged {id: uint, user: principal} {flag: bool})
+(define-map clip-ratings {id: uint, user: principal} {rating: uint})
+(define-map clip-rating-stats {id: uint} {total-ratings: uint, rating-sum: uint, average-rating: uint})
+(define-map creator-reputation {creator: principal} {total-clips: uint, total-rating-sum: uint, total-ratings: uint, reputation-score: uint})
 
 (define-read-only (get-owner) (ok (var-get owner)))
 (define-read-only (get-next-id) (ok (var-get next-id)))
@@ -154,3 +161,56 @@
   (match (map-get? clips {id: id})
     c (ok (some (get platform c)))
     (ok none)))
+
+(define-public (rate-clip (id uint) (rating uint))
+  (let ((clip-data (map-get? clips {id: id})))
+    (match clip-data
+      c
+      (if (get minted c)
+          (if (not (is-eq (get creator c) tx-sender))
+              (if (and (>= rating u1) (<= rating u5))
+                  (if (is-none (map-get? clip-ratings {id: id, user: tx-sender}))
+                      (let ((current-stats (default-to {total-ratings: u0, rating-sum: u0, average-rating: u0} (map-get? clip-rating-stats {id: id})))
+                            (new-total-ratings (+ (get total-ratings current-stats) u1))
+                            (new-rating-sum (+ (get rating-sum current-stats) rating))
+                            (new-average (/ new-rating-sum new-total-ratings))
+                            (creator (get creator c))
+                            (current-rep (default-to {total-clips: u0, total-rating-sum: u0, total-ratings: u0, reputation-score: u0} (map-get? creator-reputation {creator: creator})))
+                            (new-creator-ratings (+ (get total-ratings current-rep) u1))
+                            (new-creator-sum (+ (get total-rating-sum current-rep) rating))
+                            (new-creator-score (/ new-creator-sum new-creator-ratings)))
+                        (begin
+                          (map-set clip-ratings {id: id, user: tx-sender} {rating: rating})
+                          (map-set clip-rating-stats {id: id} {total-ratings: new-total-ratings, rating-sum: new-rating-sum, average-rating: new-average})
+                          (map-set creator-reputation {creator: creator} {total-clips: (get total-clips current-rep), total-rating-sum: new-creator-sum, total-ratings: new-creator-ratings, reputation-score: new-creator-score})
+                          (ok new-average)))
+                      (err err-already-rated))
+                  (err err-invalid-rating))
+              (err err-cannot-rate-own-clip))
+          (err err-clip-not-minted))
+      (err err-clip-not-found))))
+
+(define-read-only (get-clip-rating (id uint))
+  (match (map-get? clip-rating-stats {id: id})
+    stats (ok {total-ratings: (get total-ratings stats), average-rating: (get average-rating stats)})
+    (ok {total-ratings: u0, average-rating: u0})))
+
+(define-read-only (get-user-rating (id uint) (user principal))
+  (match (map-get? clip-ratings {id: id, user: user})
+    rating-data (ok (some (get rating rating-data)))
+    (ok none)))
+
+(define-read-only (get-creator-reputation-score (creator principal))
+  (match (map-get? creator-reputation {creator: creator})
+    rep (ok (get reputation-score rep))
+    (ok u0)))
+
+(define-read-only (get-creator-stats (creator principal))
+  (match (map-get? creator-reputation {creator: creator})
+    rep (ok {total-clips: (get total-clips rep), total-ratings: (get total-ratings rep), reputation-score: (get reputation-score rep)})
+    (ok {total-clips: u0, total-ratings: u0, reputation-score: u0})))
+
+(define-read-only (can-rate-clip (id uint) (user principal))
+  (match (map-get? clips {id: id})
+    c (ok (and (get minted c) (not (is-eq (get creator c) user)) (is-none (map-get? clip-ratings {id: id, user: user}))))
+    (ok false)))
