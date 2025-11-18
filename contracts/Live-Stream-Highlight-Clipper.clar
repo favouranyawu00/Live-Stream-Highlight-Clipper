@@ -10,6 +10,7 @@
 (define-constant err-already-rated u108)
 (define-constant err-cannot-rate-own-clip u109)
 (define-constant err-clip-not-minted u110)
+(define-constant err-invalid-amount u111)
 
 (define-data-var owner principal tx-sender)
 (define-data-var next-id uint u1)
@@ -21,6 +22,7 @@
 (define-map clip-ratings {id: uint, user: principal} {rating: uint})
 (define-map clip-rating-stats {id: uint} {total-ratings: uint, rating-sum: uint, average-rating: uint})
 (define-map creator-reputation {creator: principal} {total-clips: uint, total-rating-sum: uint, total-ratings: uint, reputation-score: uint})
+(define-map clip-tips {id: uint} {total-tips: uint, total-tips-count: uint})
 
 (define-read-only (get-owner) (ok (var-get owner)))
 (define-read-only (get-next-id) (ok (var-get next-id)))
@@ -209,6 +211,24 @@
   (match (map-get? creator-reputation {creator: creator})
     rep (ok {total-clips: (get total-clips rep), total-ratings: (get total-ratings rep), reputation-score: (get reputation-score rep)})
     (ok {total-clips: u0, total-ratings: u0, reputation-score: u0})))
+
+(define-public (tip-creator (id uint) (amount uint))
+  (match (map-get? clips {id: id})
+    c
+    (if (> amount u0)
+        (let ((creator (get creator c))
+              (tips (default-to {total-tips: u0, total-tips-count: u0} (map-get? clip-tips {id: id})))
+              (new-total (+ (get total-tips tips) amount))
+              (new-count (+ (get total-tips-count tips) u1)))
+          (begin
+            (try! (stx-transfer? amount tx-sender creator))
+            (map-set clip-tips {id: id} {total-tips: new-total, total-tips-count: new-count})
+            (ok {total-tips: new-total, total-tips-count: new-count})))
+        (err err-invalid-amount))
+    (err err-clip-not-found)))
+
+(define-read-only (get-clip-tips (id uint))
+  (ok (default-to {total-tips: u0, total-tips-count: u0} (map-get? clip-tips {id: id}))))
 
 (define-read-only (can-rate-clip (id uint) (user principal))
   (match (map-get? clips {id: id})
