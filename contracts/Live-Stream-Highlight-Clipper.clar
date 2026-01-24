@@ -11,6 +11,8 @@
 (define-constant err-cannot-rate-own-clip u109)
 (define-constant err-clip-not-minted u110)
 (define-constant err-invalid-amount u111)
+(define-constant err-not-bookmarked u112)
+(define-constant err-already-bookmarked u113)
 
 (define-data-var owner principal tx-sender)
 (define-data-var next-id uint u1)
@@ -23,6 +25,9 @@
 (define-map clip-rating-stats {id: uint} {total-ratings: uint, rating-sum: uint, average-rating: uint})
 (define-map creator-reputation {creator: principal} {total-clips: uint, total-rating-sum: uint, total-ratings: uint, reputation-score: uint})
 (define-map clip-tips {id: uint} {total-tips: uint, total-tips-count: uint})
+(define-map user-bookmarks {user: principal, id: uint} {bookmarked: bool})
+(define-map user-bookmark-count {user: principal} {count: uint})
+(define-map clip-bookmark-count {id: uint} {count: uint})
 
 (define-read-only (get-owner) (ok (var-get owner)))
 (define-read-only (get-next-id) (ok (var-get next-id)))
@@ -234,3 +239,38 @@
   (match (map-get? clips {id: id})
     c (ok (and (get minted c) (not (is-eq (get creator c) user)) (is-none (map-get? clip-ratings {id: id, user: user}))))
     (ok false)))
+
+(define-public (bookmark-clip (id uint))
+  (match (map-get? clips {id: id})
+    c
+    (if (is-none (map-get? user-bookmarks {user: tx-sender, id: id}))
+        (let ((user-count (default-to {count: u0} (map-get? user-bookmark-count {user: tx-sender})))
+              (clip-count (default-to {count: u0} (map-get? clip-bookmark-count {id: id}))))
+          (begin
+            (map-set user-bookmarks {user: tx-sender, id: id} {bookmarked: true})
+            (map-set user-bookmark-count {user: tx-sender} {count: (+ (get count user-count) u1)})
+            (map-set clip-bookmark-count {id: id} {count: (+ (get count clip-count) u1)})
+            (ok true)))
+        (err err-already-bookmarked))
+    (err err-clip-not-found)))
+
+(define-public (remove-bookmark (id uint))
+  (match (map-get? user-bookmarks {user: tx-sender, id: id})
+    b
+    (let ((user-count (default-to {count: u1} (map-get? user-bookmark-count {user: tx-sender})))
+          (clip-count (default-to {count: u1} (map-get? clip-bookmark-count {id: id}))))
+      (begin
+        (map-delete user-bookmarks {user: tx-sender, id: id})
+        (map-set user-bookmark-count {user: tx-sender} {count: (- (get count user-count) u1)})
+        (map-set clip-bookmark-count {id: id} {count: (- (get count clip-count) u1)})
+        (ok true)))
+    (err err-not-bookmarked)))
+
+(define-read-only (is-bookmarked (id uint) (user principal))
+  (ok (is-some (map-get? user-bookmarks {user: user, id: id}))))
+
+(define-read-only (get-user-bookmark-count (user principal))
+  (ok (get count (default-to {count: u0} (map-get? user-bookmark-count {user: user})))))
+
+(define-read-only (get-clip-bookmark-count (id uint))
+  (ok (get count (default-to {count: u0} (map-get? clip-bookmark-count {id: id})))))
